@@ -1,0 +1,280 @@
+#include <SPI.h>
+#include <LoRa.h>
+
+// =============================
+// NODE A - PIN CONFIGURATION
+// =============================
+
+#define LORA_SCK   18
+#define LORA_MISO  19
+#define LORA_MOSI  23
+#define LORA_SS     5
+#define LORA_RST   14
+#define LORA_DIO0  26
+
+#define LORA_FREQ 433E6
+
+// =============================
+// COMMUNICATION SETTINGS
+// =============================
+
+const unsigned long ACK_TIMEOUT = 1500;
+const int MAX_RETRIES = 3;
+
+const unsigned long TURN_DELAY = 300;
+
+// Node A packet counter
+int packetID = 0;
+
+// =============================
+// SEND ACK
+// =============================
+
+void sendACK(int id) {
+
+  String ack = "ACK,A," + String(id);
+
+  Serial.print("Sending ACK: ");
+  Serial.println(ack);
+
+  LoRa.beginPacket();
+  LoRa.print(ack);
+  LoRa.endPacket();
+
+  Serial.println("ACK transmitted.");
+}
+
+// =============================
+// SEND DATA FROM NODE A
+// =============================
+
+bool sendAData(int id) {
+
+  String message = "A," + String(id) + ",DATA,HELLO";
+
+  for (int attempt = 1; attempt <= MAX_RETRIES; attempt++) {
+
+    Serial.println();
+    Serial.println("--------------------------------");
+    Serial.print("NODE A sending: ");
+    Serial.println(message);
+
+    Serial.print("Attempt: ");
+    Serial.println(attempt);
+
+    unsigned long startTime = millis();
+
+    LoRa.beginPacket();
+    LoRa.print(message);
+    LoRa.endPacket();
+
+    Serial.println("Waiting for ACK...");
+
+    unsigned long waitStart = millis();
+
+    while (millis() - waitStart < ACK_TIMEOUT) {
+
+      int packetSize = LoRa.parsePacket();
+
+      if (packetSize) {
+
+        String received = "";
+
+        while (LoRa.available()) {
+          received += (char)LoRa.read();
+        }
+
+        Serial.print("Received: ");
+        Serial.println(received);
+
+        String expectedACK = "ACK,A," + String(id);
+
+        if (received == expectedACK) {
+
+          unsigned long latency = millis() - startTime;
+
+          Serial.println("ACK received!");
+
+          Serial.print("Latency: ");
+          Serial.print(latency);
+          Serial.println(" ms");
+
+          Serial.print("ACK RSSI: ");
+          Serial.print(LoRa.packetRssi());
+          Serial.println(" dBm");
+
+          Serial.print("ACK SNR: ");
+          Serial.print(LoRa.packetSnr());
+          Serial.println(" dB");
+
+          return true;
+        }
+      }
+    }
+
+    Serial.println("ACK timeout!");
+
+    if (attempt < MAX_RETRIES) {
+      Serial.println("Retransmitting...");
+      delay(100);
+    }
+  }
+
+  Serial.println("Packet failed after maximum retries.");
+
+  return false;
+}
+
+// =============================
+// WAIT FOR NODE B DATA
+// =============================
+
+void waitForBData() {
+
+  Serial.println();
+  Serial.println("Node A waiting for Node B DATA...");
+
+  unsigned long waitStart = millis();
+
+  while (millis() - waitStart < 5000) {
+
+    int packetSize = LoRa.parsePacket();
+
+    if (packetSize) {
+
+      String received = "";
+
+      while (LoRa.available()) {
+        received += (char)LoRa.read();
+      }
+
+      Serial.println();
+      Serial.println("========== DATA RECEIVED ==========");
+
+      Serial.print("Packet: ");
+      Serial.println(received);
+
+      Serial.print("RSSI: ");
+      Serial.print(LoRa.packetRssi());
+      Serial.println(" dBm");
+
+      Serial.print("SNR: ");
+      Serial.print(LoRa.packetSnr());
+      Serial.println(" dB");
+
+      // Check that packet is from B
+      if (received.startsWith("B,")) {
+
+        int firstComma = received.indexOf(',');
+        int secondComma = received.indexOf(',', firstComma + 1);
+
+        if (firstComma != -1 && secondComma != -1) {
+
+          int receivedID = received.substring(
+            firstComma + 1,
+            secondComma
+          ).toInt();
+
+          Serial.print("Sender: B");
+          Serial.println();
+
+          Serial.print("Packet ID: ");
+          Serial.println(receivedID);
+
+          // Send ACK
+          String ack = "ACK,B," + String(receivedID);
+
+          Serial.print("Sending ACK: ");
+          Serial.println(ack);
+
+          LoRa.beginPacket();
+          LoRa.print(ack);
+          LoRa.endPacket();
+
+          Serial.println("ACK transmitted.");
+          Serial.println("==================================");
+
+          delay(TURN_DELAY);
+
+          return;
+        }
+      }
+    }
+  }
+
+  Serial.println("No DATA received from Node B.");
+}
+
+// =============================
+// SETUP
+// =============================
+
+void setup() {
+
+  Serial.begin(115200);
+  delay(2000);
+
+  Serial.println();
+  Serial.println("====================================");
+  Serial.println("       BIDIRECTIONAL NODE A");
+  Serial.println("====================================");
+
+  SPI.begin(
+    LORA_SCK,
+    LORA_MISO,
+    LORA_MOSI,
+    LORA_SS
+  );
+
+  LoRa.setSPI(SPI);
+
+  LoRa.setPins(
+    LORA_SS,
+    LORA_RST,
+    LORA_DIO0
+  );
+
+  Serial.println("Starting LoRa at 433 MHz...");
+
+  if (!LoRa.begin(LORA_FREQ)) {
+
+    Serial.println("ERROR: LoRa initialization FAILED!");
+
+    while (true) {
+      delay(1000);
+    }
+  }
+
+  Serial.println("LoRa initialization SUCCESS!");
+  Serial.println("Node A ready.");
+  Serial.println();
+}
+
+// =============================
+// MAIN LOOP
+// =============================
+
+void loop() {
+
+  // -------------------------
+  // A sends DATA
+  // -------------------------
+
+  packetID++;
+
+  bool success = sendAData(packetID);
+
+  if (success) {
+
+    // Give B time to prepare
+    delay(TURN_DELAY);
+
+    // -------------------------
+    // B sends DATA
+    // -------------------------
+
+    waitForBData();
+  }
+
+  delay(300);
+}
